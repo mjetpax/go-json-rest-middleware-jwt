@@ -85,12 +85,14 @@ func (mw *JWTMiddleware) MiddlewareFunc(handler rest.HandlerFunc) rest.HandlerFu
 func (mw *JWTMiddleware) middlewareImpl(writer rest.ResponseWriter, request *rest.Request, handler rest.HandlerFunc) {
 	token, err := mw.parseToken(request)
 
+	claims := token.Claims.(jwt.MapClaims)
+
 	if err != nil {
 		mw.unauthorized(writer)
 		return
 	}
 
-	idInterface := token.Claims["id"]
+	idInterface := claims["id"]
 
 	if idInterface == nil {
 		mw.unauthorized(writer)
@@ -100,7 +102,7 @@ func (mw *JWTMiddleware) middlewareImpl(writer rest.ResponseWriter, request *res
 	id := idInterface.(string)
 
 	request.Env["REMOTE_USER"] = id
-	request.Env["JWT_PAYLOAD"] = token.Claims
+	request.Env["JWT_PAYLOAD"] = claims
 
 	if !mw.Authorizator(id, request) {
 		mw.unauthorized(writer)
@@ -148,16 +150,18 @@ func (mw *JWTMiddleware) LoginHandler(writer rest.ResponseWriter, request *rest.
 
 	token := jwt.New(jwt.GetSigningMethod(mw.SigningAlgorithm))
 
+	claims := token.Claims.(jwt.MapClaims)
+
 	if mw.PayloadFunc != nil {
 		for key, value := range mw.PayloadFunc(loginVals.Username) {
-			token.Claims[key] = value
+			claims[key] = value
 		}
 	}
 
-	token.Claims["id"] = loginVals.Username
-	token.Claims["exp"] = time.Now().Add(mw.Timeout).Unix()
+	claims["id"] = loginVals.Username
+	claims["exp"] = time.Now().Add(mw.Timeout).Unix()
 	if mw.MaxRefresh != 0 {
-		token.Claims["orig_iat"] = time.Now().Unix()
+		claims["orig_iat"] = time.Now().Unix()
 	}
 	tokenString, err := token.SignedString(mw.Key)
 
@@ -195,13 +199,15 @@ func (mw *JWTMiddleware) parseToken(request *rest.Request) (*jwt.Token, error) {
 func (mw *JWTMiddleware) RefreshHandler(writer rest.ResponseWriter, request *rest.Request) {
 	token, err := mw.parseToken(request)
 
+	claims := token.Claims.(jwt.MapClaims)
+
 	// Token should be valid anyway as the RefreshHandler is authed
 	if err != nil {
 		mw.unauthorized(writer)
 		return
 	}
 
-	origIat := int64(token.Claims["orig_iat"].(float64))
+	origIat := int64(claims["orig_iat"].(float64))
 
 	if origIat < time.Now().Add(-mw.MaxRefresh).Unix() {
 		mw.unauthorized(writer)
@@ -209,14 +215,15 @@ func (mw *JWTMiddleware) RefreshHandler(writer rest.ResponseWriter, request *res
 	}
 
 	newToken := jwt.New(jwt.GetSigningMethod(mw.SigningAlgorithm))
+	newClaims := newToken.Claims.(jwt.MapClaims)
 
-	for key := range token.Claims {
-		newToken.Claims[key] = token.Claims[key]
+	for key := range claims {
+		newClaims[key] = claims[key]
 	}
 
-	newToken.Claims["id"] = token.Claims["id"]
-	newToken.Claims["exp"] = time.Now().Add(mw.Timeout).Unix()
-	newToken.Claims["orig_iat"] = origIat
+	newClaims["id"] = claims["id"]
+	newClaims["exp"] = time.Now().Add(mw.Timeout).Unix()
+	newClaims["orig_iat"] = origIat
 	tokenString, err := newToken.SignedString(mw.Key)
 
 	if err != nil {
